@@ -1,180 +1,58 @@
 clear; close all;
-%% Full PDE Sim - Electric
-%Electrostatic field for heat equation
-modelElectric = createpde();
+
+%% Generate Data
+currents = [0, 20, 50,20, 100];
+
+BCs = [10, -5; 
+       1, 1;  
+      -10, 20;
+        5,15;
+      -12,14;
+       20, 20];
+
+sensors = [0, 0, 0 ; 
+           0, 5, 10];
+
+[Data, tlist, FE_Matrices, SVD_Matrices] = genData(currents, BCs, sensors);
+
+%% Find Singular Values
+sigma = zeros(length(SVD_Matrices.Sc),1);
+for i = 1:length(SVD_Matrices.Sc)
+    sigma(i) = SVD_Matrices.Sc(i,i);
+end
+
+figure 
+plot(sigma);
+xlabel('Index')
+ylabel('Explanatory Power of \sigma')
+title('Number of Modes vs. Explanatory power of \sigma')
+
+%% Project number of modes chosen to FE Matrices
+Urc = SVD_Matrices.Uc(:,1:8); % projection matrix
+Reduced_FE_Matrices.Mrc = Urc' * FE_Matrices.Mc * Urc;
+Reduced_FE_Matrices.Krc = Urc' * FE_Matrices.Kc * Urc;
+Reduced_FE_Matrices.Lr = FE_Matrices.L * Urc;
+
+Reduced_FE_Matrices.Mrc_inv = inv(Reduced_FE_Matrices.Mrc);
+
+%% Project modes to data
+Reduced_Data = cell(size(Data));
+for i = 1:size(Data, 1)
+    Reduced_Data(i,1) = Data(i,1);
+    Reduced_Data{i,2} = Urc' * Data{i,2};
+    Reduced_Data{i,3} = Urc' * Data{i,3};    
+end
+
+%% Saving data
+save("data.mat", "Reduced_Data")
+save("R_FE_Mats.mat","Reduced_FE_Matrices")
+save("FOM_Data", "Data")
+
+%% 
 figure
-gm = fegeometry("fuse.stl");
-pdegplot(gm,"EdgeLabels","on");
-importGeometry(modelElectric,"fuse.stl"); % geometryFromEdges for 2-D
-Emesh = generateMesh(modelElectric,"Hmax",0.03); % generate mesh 
-
-Conductivity = 2.633E+04; %S/mm
-
-%Specify Equation
-specifyCoefficients(modelElectric,'m',0,...
-                          'd',0,...
-                          'c',Conductivity,...
-                          'a',0,...
-                          'f',0);
-
-% dirichlet boundary condition for E-domain
-% electromagneticProperties(modelElectric,"Conductivity",2.633E+07);
-applyBoundaryCondition(modelElectric,"dirichlet","Edge",3,"u",0);
-
-%Neuman boundary condition for E-domain
-current = 130 ;%amp
-thickness = 1; %mm
-boundary_length = 10; %mm
-applyBoundaryCondition(modelElectric,"neumann","Edge",6,"q",0,"g",current/(thickness*boundary_length));
-% electromagneticBC(modelElectric,"Edge",6, ...current/(thickness*boundary_length)
-%     "SurfaceCurrentDensity",current/(thickness*boundary_length)); %surface current density
- 
-Eresults = solvepde(modelElectric);
-
-pdeplot(modelElectric,"XYData",((Conductivity*Eresults.XGradients).^2+(Conductivity*Eresults.YGradients).^2), ...
-              "Contour","on", ...
-              "FlowData",[Eresults.XGradients,Eresults.YGradients])
-axis equal
-
-%% Full PDE Sim - Heat Set Up
-results_accumulator = [];
-rho_0 = 1/Conductivity; %ohm-mm
-alpha = 0.004; % 1/K
-f = @(region,state)heatGen_lin(region,state,Eresults,rho_0,thickness, alpha);
-
-% Thermal simulation (Joule heating)
-modelThermal = createpde();
-% ... (Define geometry, coefficients, and boundary conditions for thermal simulation)
-importGeometry(modelThermal,"fuse.stl"); % geometryFromEdges for 2-D
-thermal_mesh = generateMesh(modelThermal,"Hmax",0.3); % generate mesh 
-
-% Specify Joule heating term using electric potential obtained
-thermalConductivity = 0.157; % thermal conductivity - W/mmK
-rho = 2.7e-6; % mass density - kg/mm^3
-SpecificHeat = 978; % J/KgK
-enthalpyConstant = rho*SpecificHeat;
-specifyCoefficients(modelThermal, "m", 0, "d", enthalpyConstant, "c", thermalConductivity, "a", 0, "f", f);
-
-% Set boundary conditions for thermal simulation
-% thermalBC(modelThermal, "Edge", 3, "Temperature", 280); 
-applyBoundaryCondition(modelThermal,"dirichlet","Edge",3,"u",60);% Set temperature at the boundary
-applyBoundaryCondition(modelThermal,"dirichlet","Edge",6,"u",80);% Set temperature at the boundary
-
-% Generate mesh and solve the thermal PDE
-generateMesh(modelThermal);
-tlist = linspace(0, 1.5, 100); % Define the time vector
-setInitialConditions(modelThermal,70);
-
-results_thermal = solvepde(modelThermal,tlist);
-results_accumulator = results_thermal.NodalSolution;
-
-%% Add source vector data
-F_vector = [];
-for i = 1:100
-    state.time=tlist(i);
-    state.u = results_thermal.NodalSolution(:,i)';
-    F = assembleFEMatrices(modelThermal, "F", state);
-    F_vector = [F_vector F.F];
-end
-
-F_vector = 1e3 * F_vector; 
-results_accumulator = [results_accumulator F_vector];
-
-%% Conduction only modes
-specifyCoefficients(modelThermal, "m", 0, "d", enthalpyConstant, "c", thermalConductivity, "a", 0, "f", 0);
-results_thermal = solvepde(modelThermal,tlist);
-
-
-results_accumulator = [results_accumulator results_thermal.NodalSolution];
-
-% %Plot the temperature distribution
-% for i = 1:length(tlist)
-%     pdeplot(modelThermal, "XYData", results_thermal.NodalSolution(:,i), "Contour", "on","ColorMap","Hot");
-%     title("FOM: Joule Heating 2D Model with Electric Potential Input - PDE Toolbox");
-%     axis equal
-%     pause(1/10000); % Add a pause if you want to visualize the results in real-time
-% end
-
-%% PCA and ROM Modes extraction
-
-X = results_accumulator;
-% X = X - mean(X);
-[U, S, ~] = svd(X,"econ");
-
-pdeplot(modelThermal, "XYData",U(:,4))
-axis equal
-
-Ur = U(:, 1:4);
-
-
-y = zeros(length(S),1);
-for i = 1:length(S)
-    y(i) = S(i,i);
-end
-
-%% Extracting Matrices and Simulating using ODE 45
-MATs = assembleFEMatrices(modelThermal, state);
-
-[B,Or] = pdenullorth(MATs.H);
-ud = Or*((MATs.H*Or\MATs.R)); % Vector with known value of the constraint DoF.
-Kc = B'*(MATs.K + MATs.A + MATs.Q)*B;
-Mc = B'*MATs.M*B;
-Fc = B'*((MATs.F + MATs.G)-(MATs.K + MATs.A + MATs.Q)*ud);
-Shape = size(Fc);
-
-fun = @(t, u) ((Fc - Kc*u)) ;
-u0 = 70*ones(Shape);
-
-options = odeset('Mass',Mc ,'AbsTol',1e-3 ,'RelTol',1e-2 ,'Stats','on');
-[t,u] = ode45(fun, tlist, u0, options);
-
-u=u';
-u = B*u+ud;
-
-for i = 1:length(tlist)
-    pdeplot(modelThermal, "XYData", u(:,i), "Contour", "on","ColorMap","Hot");
-    title("FOM: Joule Heating 2D Model with Electric Potential Input- ODE45");
-    axis equal
-    pause(1/10000); % Add a pause if you want to visualize the results in real-time
-end
-
-%% ROM Generation
-Urc = B'*Ur;
-% urd = Urc'*ud; % Vector with known value of the constraint DoF.
-Krc = Urc'*Kc*Urc;
-Mrc = Urc'*Mc*Urc;
-Frc = Urc'*Fc;
-ur0 = Urc'*u0;
-
-funr = @(t, u) ((Frc - Krc*u)) ;
-options = odeset('Mass',Mrc ,'AbsTol',1e-3 ,'RelTol',1e-3 ,'Stats','on');
-[t,ur] = ode45(funr, tlist, ur0, options);
-
-ur=ur';
-ur = Urc*ur;
-ur = B*ur+ud;
-
-for i = 1:length(tlist)
-    pdeplot(modelThermal, "XYData", ur(:,i), "Contour", "on","ColorMap","Hot");
-    title("ROM: Joule Heating 2D Model with Electric Potential Input- ODE45");
-    axis equal
-    pause(1/10000); % Add a pause if you want to visualize the results in real-time
-end
-
-%% Error Quantification
-err = u - ur;
-err_pde = results_thermal.NodalSolution - u;
-
-for i = 1:length(tlist)
-    pdeplot(modelThermal, "XYData", err(:,i), "Contour", "on");
-    title("ROM to FOM error - Degrees Celcius");
-    axis equal
-    pause(1/10000); % Add a pause if you want to visualize the results in real-time
-end
-
-for i = 1:length(tlist)
-    pdeplot(modelThermal, "XYData", err_pde(:,i), "Contour", "on");
-    title("PDE to ODE45 error - Degrees Celcius");
-    axis equal
-    pause(1/100); % Add a pause if you want to visualize the results in real-time
-end
+u = Data{27,2};
+u = FE_Matrices.L * u;
+plot(tlist, u(1,:))
+hold on
+plot(tlist, u(2,:))
+plot(tlist, u(3,:))
