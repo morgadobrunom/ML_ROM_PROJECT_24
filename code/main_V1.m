@@ -45,7 +45,7 @@ f = @(region,state)heatGen_lin(region,state,Eresults,rho_0,thickness, alpha);
 modelThermal = createpde();
 % ... (Define geometry, coefficients, and boundary conditions for thermal simulation)
 importGeometry(modelThermal,"fuse.stl"); % geometryFromEdges for 2-D
-thermal_mesh = generateMesh(modelThermal); % generate mesh 
+thermal_mesh = generateMesh(modelThermal, "Hmax", 0.5); % generate mesh 
 
 % Specify Joule heating term using electric potential obtained
 thermalConductivity = 0.157; % thermal conductivity - W/mmK
@@ -63,27 +63,31 @@ applyBoundaryCondition(modelThermal,"dirichlet","Edge",6,"u",80);% Set temperatu
 tlist = linspace(0, 1.5, 100); % Define the time vector
 setInitialConditions(modelThermal,70);
 
-results_thermal = solvepde(modelThermal,tlist);
-results_accumulator = results_thermal.NodalSolution;
+
 
 %% Add source vector data
-F_vector = [];
-for i = 1:100
-    state.time=tlist(i);
-    state.u = results_thermal.NodalSolution(:,i)';
-    F = assembleFEMatrices(modelThermal, "nullspace", state);
-    F_vector = [F_vector F.Fc];
+F = [];
+modes_accumulator = [];
+for k = 1:100
+    state.time=tlist(k);
+    state.u = results_thermal.NodalSolution(:,k)';
+    MATs = assembleFEMatrices(modelThermal, "nullspace", state);
+    F = [F MATs.Fc];
 end
 
-F_vector = 1e3 * F_vector; 
-results_accumulator = [results_accumulator F_vector];
+uc = MATs.B'*results_thermal.NodalSolution;
+norm_uc = norm(uc);
+norm_F = norm(F);
+
+modes_accumulator = [modes_accumulator  uc*1000/norm_uc F*1000/norm_F];
+
 
 %% Conduction only modes
 specifyCoefficients(modelThermal, "m", 0, "d", enthalpyConstant, "c", thermalConductivity, "a", 0, "f", 0);
 results_thermal = solvepde(modelThermal,tlist);
 
 
-results_accumulator = [results_accumulator results_thermal.NodalSolution];
+modes_accumulator = [modes_accumulator MATs.B'*results_thermal.NodalSolution];
 
 % %Plot the temperature distribution
 % for i = 1:length(tlist)
@@ -95,12 +99,16 @@ results_accumulator = [results_accumulator results_thermal.NodalSolution];
 
 %% PCA and ROM Modes extraction
 
-X = results_accumulator;
+X = modes_accumulator;
 % X = X - mean(X);
 [U, S, ~] = svd(X,"econ");
-
-pdeplot(modelThermal, "XYData",U(:,4))
-axis equal
+U_f = FE_Matrices.B*SVD_Matrices.Uc;
+for i = 1:10
+    subplot(2,5,i)
+    pdeplot(modelThermal, "XYData", U_f(:,i))
+    % axis equal
+    title(strcat("SVD: mode ", string(i)))
+end
 
 Ur = U(:, 1:4);
 

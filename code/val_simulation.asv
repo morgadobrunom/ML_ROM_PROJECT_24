@@ -1,5 +1,0 @@
-net = importTensorFlowNetwork("model");
-input.BCs = Reduced_Data{1}
-input.state = ans(:,1)
-
-F = predict(net,input.BCs, input.state)

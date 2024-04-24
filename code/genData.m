@@ -90,6 +90,7 @@ end
 
 FE_Matrices.Kc = MATs.Kc;
 FE_Matrices.Mc = MATs.M;
+FE_Matrices.B = MATs.B;
 
 sensors = findNodes(modelThermal.Mesh,"nearest", sensor_positions);
 projection_mat = zeros(length(sensors), size(results_thermal.NodalSolution,1));
